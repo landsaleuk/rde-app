@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: land
+    ports: ["5432:5432"]                # change to ["5433:5432"] if 5432 is in use locally
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U postgres -d land"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data  # named volume (declared below)
+      - ./scripts:/scripts                # bind mount for your .sql files
+
+  tiles:
+    image: pramsey/pg_tileserv:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/land?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["7800:7800"]
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/land
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8000:8000"]
+    restart: unless-stopped
+    volumes:
+      - ./data:/data                      # bind mount for datasets (GML/GPKG/etc)
+
+volumes:
+  db_data:
+    external: true
+    name: c22a48442c6548f2904258a1ae75ece25ec0a01139af380489652dcd7a113d83
