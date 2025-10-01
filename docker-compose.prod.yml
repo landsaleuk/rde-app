@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    environment:
+      POSTGRES_DB: land
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: REPLACE_ME_STRONG
+    command: >
+      postgres
+      -c shared_buffers=16GB
+      -c work_mem=128MB
+      -c maintenance_work_mem=2GB
+      -c effective_cache_size=48GB
+      -c max_parallel_workers=16
+      -c max_parallel_workers_per_gather=8
+      -c wal_compression=on
+      -c checkpoint_completion_target=0.9
+    volumes:
+      - /srv/land/db:/var/lib/postgresql/data
+      - /srv/land/scripts:/scripts
+    restart: unless-stopped
+
+  tiles:
+    image: pramsey/pg_tileserv:latest
+    environment:
+      DATABASE_URL: postgresql://postgres:REPLACE_ME_STRONG@db:5432/land?sslmode=disable
+    depends_on: [db]
+    ports: ["7800:7800"]
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    environment:
+      DATABASE_URL: postgresql://postgres:REPLACE_ME_STRONG@db:5432/land
+    depends_on: [db]
+    ports: ["8000:8000"]
+    volumes:
+      - /srv/land/raw:/data
+    restart: unless-stopped
