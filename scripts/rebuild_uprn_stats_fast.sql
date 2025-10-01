@@ -20,17 +20,6 @@ DROP TABLE IF EXISTS parcel_uprn_clusters;
 DROP TABLE IF EXISTS parcel_uprn_stats;
 DROP TABLE IF EXISTS parcel_uprn_base;
 
--- Guardrails: fail with a clear message if sources are missing
-DO $$
-BEGIN
-  IF to_regclass('public.parcel_1acre') IS NULL THEN
-    RAISE EXCEPTION 'parcel_1acre is missing. Rebuild it before running this script.';
-  END IF;
-  IF to_regclass('public.os_open_uprn') IS NULL THEN
-    RAISE EXCEPTION 'os_open_uprn is missing. Import UPRNs before running this script.';
-  END IF;
-END$$;
-
 -- Source indexes (safe no-ops if already there)
 CREATE INDEX IF NOT EXISTS parcel_1acre_geom_gix ON parcel_1acre USING GIST (geom);
 CREATE INDEX IF NOT EXISTS os_open_uprn_gix       ON os_open_uprn USING GIST (geom);
@@ -125,4 +114,3 @@ FROM parcel_features f;
 SELECT COUNT(*) AS bad
 FROM   parcel_features
 WHERE  uprn_interior_count > uprn_count;
-SQL
