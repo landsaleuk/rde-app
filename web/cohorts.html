@@ -1,3 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>RDE Cohorts</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet"/>
+  <style>
+    html,body,#map { height:100%; margin:0; }
+    .legend {
+      position:absolute; z-index:1; bottom:12px; left:12px;
+      background:#fff; padding:8px 10px; border-radius:6px;
+      font:13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      box-shadow:0 1px 4px rgba(0,0,0,.15);
+    }
+    .legend .row{ display:flex; align-items:center; margin:3px 0; }
+    .sw{ width:14px; height:14px; margin-right:6px; border-radius:3px;}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="legend">
+  <div class="row"><span class="sw" style="background:#2c6d3c"></span>A_bare_land</div>
+  <div class="row"><span class="sw" style="background:#c47f3d"></span>B_single_holding</div>
+  <div class="row"><span class="sw" style="background:#5c4d7d"></span>C_dispersed_estate</div>
+</div>
+<script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 <script>
 const TILES_BASE = window.location.origin + '/tiles';     // already fixed earlier
 const LAYER      = 'public.cohort_parcels_map';
@@ -68,3 +95,5 @@ map.on('click','cohort-fill', (e) => {
     .addTo(map);
 });
 </script>
+</body>
+</html>
