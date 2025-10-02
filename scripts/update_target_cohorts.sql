@@ -1,8 +1,18 @@
--- Rebuild ONLY the cohorts MV with improved rules
---  - Adds a 'smallholding' clause so 1–5 acre parcels with 1–3 interior UPRNs are included
---  - Keeps the original sparse-density B rule for larger holdings
---  - Keeps C (dispersed estates) and A (bare land) as before
+-- =====================================================================
+-- Rebuild cohorts and the cohort_parcels_map that depends on them.
+-- Keeps one canonical MV name: target_cohorts
+-- Includes "smallholding" clause so 1–5 acre parcels with a few interior
+-- UPRNs are included as B_single_holding.
+-- =====================================================================
 
+-- keep the session stable and quick to parse
+SET statement_timeout = 0;
+SET lock_timeout = '5s';
+
+-- 0) Drop the dependent MV first, otherwise target_cohorts cannot be dropped
+DROP MATERIALIZED VIEW IF EXISTS cohort_parcels_map;
+
+-- 1) Rebuild ONLY the cohorts MV
 DROP MATERIALIZED VIEW IF EXISTS target_cohorts;
 
 CREATE MATERIALIZED VIEW target_cohorts AS
@@ -22,25 +32,25 @@ WITH f AS (
 SELECT
   f.*,
   CASE
-    -- A) Bare land / woodland (no interior UPRNs)
+    -- A) Bare land / woodland
     WHEN uprn_interior_count = 0
       THEN 'A_bare_land'
 
-    -- B) Smallholding (NEW): 1–5 acres, 1–3 interior UPRNs, <=3 clusters, most points truly interior
+    -- B) Smallholding (NEW): 1–5 acres, 1–3 interior UPRNs, <=3 clusters, mostly interior points
     WHEN acres BETWEEN 1 AND 5
          AND uprn_interior_count BETWEEN 1 AND 3
          AND uprn_cluster_count <= 3
          AND interior_share >= 0.60
       THEN 'B_single_holding'
 
-    -- B) Sparse (existing): larger holdings with very low UPRN density
+    -- B) Sparse (existing): larger holdings with very low density
     WHEN uprn_cluster_count <= 2
-         AND uprn_per_acre <= 0.05        -- ≈ 1 per 20 acres
+         AND uprn_per_acre <= 0.05     -- ≈ 1 per 20 acres
       THEN 'B_single_holding'
 
-    -- C) Dispersed estate (existing): several clusters but still rural density
+    -- C) Dispersed estate (existing)
     WHEN uprn_cluster_count BETWEEN 3 AND 8
-         AND uprn_per_acre <= 0.10        -- ≤ 1 per 10 acres
+         AND uprn_per_acre <= 0.10     -- ≤ 1 per 10 acres
       THEN 'C_dispersed_estate'
 
     -- X) Everything else (parks, hamlets, campuses, urban fringe, dense)
@@ -48,10 +58,35 @@ SELECT
   END AS cohort
 FROM f;
 
--- Helpful indexes
 CREATE INDEX target_cohorts_cohort_ix ON target_cohorts (cohort);
 CREATE INDEX target_cohorts_pid_ix    ON target_cohorts (parcel_id);
--- Optional: speed range queries by size
--- CREATE INDEX target_cohorts_acres_ix ON target_cohorts (acres);
-
 ANALYZE target_cohorts;
+
+-- 2) Recreate the map MV that depends on target_cohorts
+-- (uses simplified geom for fast tiles)
+-- If your DB has small /dev/shm, these SETs reduce JIT/shared memory use.
+SET max_parallel_workers_per_gather = 0;
+SET jit = off;
+
+CREATE MATERIALIZED VIEW cohort_parcels_map AS
+SELECT
+  p.parcel_id,
+  t.cohort,
+  (p.area_sqm/4046.8564224)::numeric(12,1) AS acres,
+  s.uprn_count,
+  s.uprn_interior_count,
+  s.uprn_per_acre,
+  (p.geom_gen)::geometry(MultiPolygon,27700) AS geom
+FROM parcel_1acre p
+JOIN target_cohorts t USING (parcel_id)
+LEFT JOIN parcel_uprn_stats s USING (parcel_id)
+WHERE t.cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate');
+
+CREATE INDEX IF NOT EXISTS cohort_parcels_map_gix        ON cohort_parcels_map USING GIST (geom);
+CREATE INDEX IF NOT EXISTS cohort_parcels_map_cohort_ix  ON cohort_parcels_map (cohort);
+ANALYZE cohort_parcels_map;
+
+-- 3) Sanity check (0 rows = good)
+SELECT COUNT(*) AS bad
+FROM target_cohorts
+WHERE uprn_interior_count > uprn_count;
