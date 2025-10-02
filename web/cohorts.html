@@ -1,7 +1,7 @@
 <script>
 const TILES_BASE = window.location.origin + '/tiles';     // already fixed earlier
 const LAYER      = 'public.cohort_parcels_map';
-const BASEMAP_URL = window.location.origin + '/osm/{z}/{x}/{y}.png';
+const BASEMAP_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';  // <-- add
 
 const map = new maplibregl.Map({
   container: 'map',
