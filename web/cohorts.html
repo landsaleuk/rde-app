@@ -9,25 +9,50 @@
     html,body,#map { height:100%; margin:0; }
     .legend {
       position:absolute; z-index:1; bottom:12px; left:12px;
-      background:#fff; padding:8px 10px; border-radius:6px;
-      font:13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background:#fff; padding:10px 12px; border-radius:8px;
+      font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
       box-shadow:0 1px 4px rgba(0,0,0,.15);
+      min-width: 220px;
     }
-    .legend .row{ display:flex; align-items:center; margin:3px 0; }
-    .sw{ width:14px; height:14px; margin-right:6px; border-radius:3px;}
+    .legend .row{
+      display:grid; grid-template-columns: 16px 1fr auto; column-gap:8px;
+      align-items:center; margin:4px 0;
+    }
+    .sw{ width:14px; height:14px; border-radius:3px; }
+    .ct{ color:#333; font-variant-numeric: tabular-nums; }
+    .legend .hdr{ font-weight:600; margin-bottom:6px; }
   </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="legend">
-  <div class="row"><span class="sw" style="background:#2c6d3c"></span>A_bare_land</div>
-  <div class="row"><span class="sw" style="background:#c47f3d"></span>B_single_holding</div>
-  <div class="row"><span class="sw" style="background:#5c4d7d"></span>C_dispersed_estate</div>
+  <div class="hdr">Cohorts</div>
+  <div class="row">
+    <span class="sw" style="background:#2c6d3c"></span>
+    <span class="lab">A_bare_land</span>
+    <span class="ct" data-k="A_bare_land">—</span>
+  </div>
+  <div class="row">
+    <span class="sw" style="background:#c47f3d"></span>
+    <span class="lab">B_single_holding</span>
+    <span class="ct" data-k="B_single_holding">—</span>
+  </div>
+  <div class="row">
+    <span class="sw" style="background:#5c4d7d"></span>
+    <span class="lab">C_dispersed_estate</span>
+    <span class="ct" data-k="C_dispersed_estate">—</span>
+  </div>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:6px 0">
+  <div class="row">
+    <span></span><span class="lab" style="font-weight:600">Total</span>
+    <span class="ct" data-k="total">—</span>
+  </div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 <script>
-const TILES_BASE = window.location.origin + '/tiles';     // already fixed earlier
-const LAYER      = 'public.cohort_parcels_map';
+const TILES_BASE  = window.location.origin + '/tiles';
+const API_BASE    = window.location.origin + '/api';
+const LAYER       = 'public.cohort_parcels_map';
 const BASEMAP_URL = 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
 
 const map = new maplibregl.Map({
@@ -94,6 +119,19 @@ map.on('click','cohort-fill', (e) => {
     .setHTML(`<b>${p.cohort}</b><br/>Parcel ${p.parcel_id}<br/>${p.acres} acres<br/>UPRNs: ${p.uprn_count} (interior ${p.uprn_interior_count})`)
     .addTo(map);
 });
+(async () => {
+  try {
+    const r = await fetch(`${API_BASE}/cohort-counts`);
+    const data = await r.json();
+    const fmt = new Intl.NumberFormat('en-GB');
+    ['A_bare_land','B_single_holding','C_dispersed_estate','total'].forEach(k => {
+      const el = document.querySelector(`.ct[data-k="${k}"]`);
+      if (el) el.textContent = fmt.format(data[k] ?? 0);
+    });
+  } catch(e) {
+    console.warn('count fetch failed', e);
+  }
+})();
 </script>
 </body>
 </html>

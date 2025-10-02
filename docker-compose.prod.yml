@@ -40,7 +40,7 @@ services:
 
   web:
     image: nginx:alpine
-    depends_on: [tiles]
+    depends_on: [tiles, api]
     ports: ["8080:80"]
     volumes:
       - ./web:/usr/share/nginx/html:ro
