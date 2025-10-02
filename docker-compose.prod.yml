@@ -17,7 +17,7 @@ services:
       -c checkpoint_completion_target=0.9
     volumes:
       - /srv/land/db:/var/lib/postgresql/data
-      - /srv/land/scripts:/scripts
+      - ./scripts:/scripts:ro
     restart: unless-stopped
 
   tiles:
