@@ -2,47 +2,43 @@ services:
   db:
     image: postgis/postgis:15-3.4
     environment:
-      POSTGRES_DB: land
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: REPLACE_ME_STRONG
-    command: >
-      postgres
-      -c shared_buffers=16GB
-      -c work_mem=128MB
-      -c maintenance_work_mem=2GB
-      -c effective_cache_size=48GB
-      -c max_parallel_workers=16
-      -c max_parallel_workers_per_gather=8
-      -c wal_compression=on
-      -c checkpoint_completion_target=0.9
-    volumes:
-      - /srv/land/db:/var/lib/postgresql/data
-      - ./scripts:/scripts:ro
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: land
+    ports: ["5432:5432"]                # change to ["5433:5432"] if 5432 is in use locally
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U postgres -d land"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data  # named volume (declared below)
+      - ./scripts:/scripts                # bind mount for your .sql files
 
   tiles:
     image: pramsey/pg_tileserv:latest
     environment:
-      DATABASE_URL: postgresql://postgres:REPLACE_ME_STRONG@db:5432/land?sslmode=disable
-    depends_on: [db]
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/land?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
     ports: ["7800:7800"]
     restart: unless-stopped
 
   api:
     build: ./api
     environment:
-      DATABASE_URL: postgresql://postgres:REPLACE_ME_STRONG@db:5432/land
-    depends_on: [db]
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/land
+    depends_on:
+      db:
+        condition: service_healthy
     ports: ["8000:8000"]
-    volumes:
-      - /srv/land/raw:/data
     restart: unless-stopped
+    volumes:
+      - ./data:/data                      # bind mount for datasets (GML/GPKG/etc)
 
-  web:
-    image: nginx:alpine
-    depends_on: [tiles, api]
-    ports: ["8080:80"]
-    volumes:
-      - ./web:/usr/share/nginx/html:ro
-      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    restart: unless-stopped
+volumes:
+  db_data:
+    external: true
+    name: c22a48442c6548f2904258a1ae75ece25ec0a01139af380489652dcd7a113d83
