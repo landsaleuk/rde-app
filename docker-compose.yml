@@ -13,8 +13,7 @@ services:
       retries: 20
     restart: unless-stopped
     volumes:
-      - db_data:/var/lib/postgresql/data  # named volume (declared below)
-      - ./scripts:/scripts                # bind mount for your .sql files
+      db_data: {}
 
   tiles:
     image: pramsey/pg_tileserv:latest
@@ -37,8 +36,3 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/data                      # bind mount for datasets (GML/GPKG/etc)
-
-volumes:
-  db_data:
-    external: true
-    name: c22a48442c6548f2904258a1ae75ece25ec0a01139af380489652dcd7a113d83
