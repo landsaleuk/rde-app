@@ -37,8 +37,3 @@ services:
     restart: unless-stopped
     volumes:
       - ./data:/data                      # bind mount for datasets (GML/GPKG/etc)
-
-volumes:
-  db_data:
-    external: true
-    name: c22a48442c6548f2904258a1ae75ece25ec0a01139af380489652dcd7a113d83
