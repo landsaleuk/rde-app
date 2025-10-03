@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: land
-    ports: []
+    ports: ["5432:5432"]          # dev default; will be removed by prod override
     healthcheck:
       test: ["CMD-SHELL","pg_isready -U postgres -d land"]
       interval: 5s
@@ -13,7 +13,8 @@ services:
       retries: 20
     restart: unless-stopped
     volumes:
-      db_data: {}
+      - db_data:/var/lib/postgresql/data
+      - ./scripts:/scripts
 
   tiles:
     image: pramsey/pg_tileserv:latest
@@ -33,6 +34,18 @@ services:
       db:
         condition: service_healthy
     ports: ["8000:8000"]
-    restart: unless-stopped
     volumes:
-      - ./data:/data                      # bind mount for datasets (GML/GPKG/etc)
+      - ./data:/data
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    depends_on: [tiles, api]
+    ports: ["8080:80"]
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  db_data: {}
