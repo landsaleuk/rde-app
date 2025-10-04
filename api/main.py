@@ -200,19 +200,7 @@ def parcel_uprns(parcel_id: int):
                 rows = cur.fetchall()
                 return {"parcel_id": parcel_id, "uprns": rows}
 
-@app.get("/api/cohorts/stats")
-def cohort_stats():
-    sql = """
-      SELECT cohort, COUNT(*)::bigint AS n
-      FROM target_cohorts
-      WHERE cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')
-      GROUP BY cohort
-    """
-    agg = {"A_bare_land": 0, "B_single_holding": 0, "C_dispersed_estate": 0}
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            for r in cur.fetchall():
-                agg[r["cohort"]] = int(r["n"])
-    agg["total"] = sum(agg.values())
-    return agg
+@app.get("/api/cohort-counts")
+def cohort_counts_alias():
+    # backwards-compatible alias for the HTML page
+    return cohort_stats()
