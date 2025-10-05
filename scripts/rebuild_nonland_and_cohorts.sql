@@ -1,7 +1,7 @@
--- =====================================================================
--- Rebuild non-land flags (Zoomstack + land mask) and cohorts + map
--- Drops dependents in the correct order, then recreates everything.
--- =====================================================================
+-- Rebuild land mask (from os_land), non-land flags, cohorts, and the map
+-- in the right order. Uses your existing layers: os_land, os_water,
+-- os_roads_local/ regional / national, os_rail, parcel_1acre, parcel_features,
+-- parcel_uprn_stats.
 
 SET statement_timeout = 0;
 SET lock_timeout = '5s';
@@ -9,22 +9,29 @@ SET max_parallel_workers_per_gather = 8;
 SET work_mem = '256MB';
 SET maintenance_work_mem = '512MB';
 
--- ---- 0) Drop dependents so we can rebuild bases --------------------------------
+-- 0) Drop dependents first (correct order)
 DROP MATERIALIZED VIEW IF EXISTS cohort_parcels_map;
 DROP MATERIALIZED VIEW IF EXISTS target_cohorts;
 DROP MATERIALIZED VIEW IF EXISTS parcel_nonland_flags;
 DROP MATERIALIZED VIEW IF EXISTS rail_buf;
 DROP MATERIALIZED VIEW IF EXISTS roads_buf;
+DROP MATERIALIZED VIEW IF EXISTS gb_land_mask;
 
--- ---- 1) Safety: indexes on source layers ---------------------------------------
+-- 1) Land mask (no attributes on os_land, so just union)
+CREATE MATERIALIZED VIEW gb_land_mask AS
+SELECT ST_UnaryUnion(ST_Buffer(geom, 0)) AS geom
+FROM os_land;
+CREATE INDEX gb_land_mask_gix ON gb_land_mask USING GIST (geom);
+ANALYZE gb_land_mask;
+
+-- 2) Safety indexes on sources
 CREATE INDEX IF NOT EXISTS os_water_gix          ON os_water          USING GIST (geom);
 CREATE INDEX IF NOT EXISTS os_roads_local_gix    ON os_roads_local    USING GIST (geom);
 CREATE INDEX IF NOT EXISTS os_roads_regional_gix ON os_roads_regional USING GIST (geom);
 CREATE INDEX IF NOT EXISTS os_roads_national_gix ON os_roads_national USING GIST (geom);
 CREATE INDEX IF NOT EXISTS os_rail_gix           ON os_rail           USING GIST (geom);
-CREATE INDEX IF NOT EXISTS gb_land_mask_gix      ON gb_land_mask      USING GIST (geom);
 
--- ---- 2) Prebuffer roads & rail once --------------------------------------------
+-- 3) Prebuffer roads & rail (so we don’t buffer per parcel)
 CREATE MATERIALIZED VIEW roads_buf AS
 SELECT ST_Buffer(geom, 12.0) AS geom FROM os_roads_national
 UNION ALL
@@ -39,7 +46,7 @@ SELECT ST_Buffer(geom, 7.5) AS geom FROM os_rail;
 CREATE INDEX rail_buf_gix ON rail_buf USING GIST (geom);
 ANALYZE rail_buf;
 
--- ---- 3) Compute parcel_nonland_flags -------------------------------------------
+-- 4) Compute flags (offshore/land<10%, water>=50%, road/rail corridors, long-thin)
 CREATE MATERIALIZED VIEW parcel_nonland_flags AS
 WITH base AS (
   SELECT p.parcel_id, p.geom, p.area_sqm::double precision AS a_parcel
@@ -84,13 +91,13 @@ SELECT
   (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0))::numeric(6,4)
     AS compactness,
   CASE
-    WHEN land.offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.10 THEN TRUE          -- offshore or mostly off land
-    WHEN (w.a_water / NULLIF(b.a_parcel,0)) >= 0.50 THEN TRUE                                      -- mostly water
-    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.60 AND (b.a_parcel/4046.8564224) <= 30 THEN TRUE   -- road corridor
-    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND (b.a_parcel/4046.8564224) <= 50 THEN TRUE   -- rail corridor
+    WHEN land.offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.10 THEN TRUE
+    WHEN (w.a_water / NULLIF(b.a_parcel,0)) >= 0.50 THEN TRUE
+    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.60 AND (b.a_parcel/4046.8564224) <= 30 THEN TRUE
+    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND (b.a_parcel/4046.8564224) <= 50 THEN TRUE
     WHEN (b.a_parcel/4046.8564224) <= 20 AND
          (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0)) < 0.020
-      THEN TRUE                                                                                     -- long-thin (likely highway)
+      THEN TRUE
     ELSE FALSE
   END AS is_nonland,
   CASE
@@ -99,7 +106,7 @@ SELECT
     WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.60 AND (b.a_parcel/4046.8564224) <= 30 THEN 'road corridor'
     WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND (b.a_parcel/4046.8564224) <= 50 THEN 'rail corridor'
     WHEN (b.a_parcel/4046.8564224) <= 20 AND
-         (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0)) < 0.020
+         (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)*ST_Perimeter(b.geom), 0)) < 0.020
       THEN 'long-thin'
     ELSE NULL
   END AS nonland_reason
@@ -112,24 +119,16 @@ LEFT JOIN land ON land.parcel_id = b.parcel_id;
 CREATE INDEX parcel_nonland_flags_pid_ix ON parcel_nonland_flags (parcel_id);
 ANALYZE parcel_nonland_flags;
 
--- ---- 4) Rebuild cohorts (with smallholding + mid-size rules, gated by non-land) ---
+-- 5) Cohorts (smallholding + mid-size bands) gated by non-land
 CREATE MATERIALIZED VIEW target_cohorts AS
 WITH f AS (
   SELECT
-    pf.parcel_id,
-    pf.acres,
-    pf.uprn_count,
-    pf.uprn_interior_count,
-    pf.uprn_per_acre,
-    COALESCE(pf.uprn_cluster_count,0) AS uprn_cluster_count,
-    CASE WHEN pf.uprn_count > 0
-         THEN pf.uprn_interior_count::float / pf.uprn_count
-         ELSE 0 END AS interior_share
+    pf.parcel_id, pf.acres, pf.uprn_count, pf.uprn_interior_count,
+    pf.uprn_per_acre, COALESCE(pf.uprn_cluster_count,0) AS uprn_cluster_count,
+    CASE WHEN pf.uprn_count > 0 THEN pf.uprn_interior_count::float / pf.uprn_count ELSE 0 END AS interior_share
   FROM parcel_features pf
 ),
-nl AS (
-  SELECT parcel_id, is_nonland FROM parcel_nonland_flags
-)
+nl AS (SELECT parcel_id, is_nonland FROM parcel_nonland_flags)
 SELECT f.*,
 CASE
   WHEN COALESCE(nl.is_nonland,FALSE)                                   THEN 'X_exclude'
@@ -149,7 +148,7 @@ CREATE INDEX target_cohorts_cohort_ix ON target_cohorts (cohort);
 CREATE INDEX target_cohorts_pid_ix    ON target_cohorts (parcel_id);
 ANALYZE target_cohorts;
 
--- ---- 5) Rebuild cohort map MV -----------------------------------------------
+-- 6) Map; hard-gate on NOT is_nonland so it can never show those parcels
 SET max_parallel_workers_per_gather = 0;  SET jit = off;
 
 CREATE MATERIALIZED VIEW cohort_parcels_map AS
@@ -161,16 +160,11 @@ SELECT
   (p.geom_gen)::geometry(MultiPolygon,27700) AS geom
 FROM parcel_1acre p
 JOIN target_cohorts t USING (parcel_id)
+JOIN parcel_nonland_flags nfl USING (parcel_id)   -- hard gate
 LEFT JOIN parcel_uprn_stats s USING (parcel_id)
-WHERE t.cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate');
+WHERE t.cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')
+  AND NOT nfl.is_nonland;
 
 CREATE INDEX IF NOT EXISTS cohort_parcels_map_gix       ON cohort_parcels_map USING GIST (geom);
 CREATE INDEX IF NOT EXISTS cohort_parcels_map_cohort_ix ON cohort_parcels_map (cohort);
 ANALYZE cohort_parcels_map;
-
--- ---- 6) Sanity checks ---------------------------------------------------------
--- 0 rows expected
-SELECT COUNT(*) AS bad_counts FROM target_cohorts WHERE uprn_interior_count > uprn_count;
-
--- quick tally by cohort
-SELECT cohort, COUNT(*) AS n FROM target_cohorts GROUP BY cohort ORDER BY cohort;
