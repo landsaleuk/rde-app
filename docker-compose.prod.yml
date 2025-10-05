@@ -5,7 +5,7 @@ services:
     ports: []
     volumes:
       - /srv/land/db:/var/lib/postgresql/data
-      - /srv/land/scripts:/scripts:ro
+      - ./scripts:/scripts:ro
 
   tiles:
     environment:
