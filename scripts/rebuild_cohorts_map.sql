@@ -5,8 +5,12 @@ DROP MATERIALIZED VIEW IF EXISTS target_cohorts;
 CREATE MATERIALIZED VIEW target_cohorts AS
 WITH f AS (
   SELECT
-    pf.parcel_id, pf.acres, pf.uprn_count, pf.uprn_interior_count,
-    pf.uprn_per_acre, COALESCE(pf.uprn_cluster_count,0) AS uprn_cluster_count,
+    pf.parcel_id,
+    pf.acres,
+    pf.uprn_count,
+    pf.uprn_interior_count,
+    pf.uprn_per_acre,
+    COALESCE(pf.uprn_cluster_count,0) AS uprn_cluster_count,
     CASE WHEN pf.uprn_count > 0 THEN pf.uprn_interior_count::float / pf.uprn_count ELSE 0 END AS interior_share
   FROM parcel_features pf
 ),
@@ -30,17 +34,19 @@ CREATE INDEX target_cohorts_cohort_ix ON target_cohorts (cohort);
 CREATE INDEX target_cohorts_pid_ix    ON target_cohorts (parcel_id);
 ANALYZE target_cohorts;
 
--- Rebuild the map with a HARD gate so it can never show non-land
+-- Rebuild the map with a HARD gate so non-land can never show
 CREATE MATERIALIZED VIEW cohort_parcels_map AS
 SELECT
   p.parcel_id,
   t.cohort,
   (p.area_sqm/4046.8564224)::numeric(12,1) AS acres,
-  s.uprn_count, s.uprn_interior_count, s.uprn_per_acre,
+  s.uprn_count,
+  s.uprn_interior_count,
+  s.uprn_per_acre,
   (p.geom_gen)::geometry(MultiPolygon,27700) AS geom
 FROM parcel_1acre p
 JOIN target_cohorts t USING (parcel_id)
-JOIN parcel_nonland_flags nfl USING (parcel_id)      -- hard gate
+JOIN parcel_nonland_flags nfl USING (parcel_id)    -- hard gate
 LEFT JOIN parcel_uprn_stats s USING (parcel_id)
 WHERE t.cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')
   AND NOT nfl.is_nonland;
