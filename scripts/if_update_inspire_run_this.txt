@@ -1,0 +1,11 @@
+# (re)build land mask only if os_land changed
+psql -f /scripts/rebuild_land_mask.sql
+
+# non‑land flags (roads_buf/rail_buf inside)
+psql -f /scripts/build_nonland_from_zoomstack.sql
+
+# aggregate to one row per parcel
+psql -f /scripts/build_nfl_gate.sql
+
+# cohorts + map (hard‑gated)
+psql -f /scripts/rebuild_cohorts_map.sql
