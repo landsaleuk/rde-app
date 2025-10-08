@@ -1,21 +1,25 @@
+-- scripts/patch_land_mask.sql
+-- Build a single-row GB land mask and close tile seams
+SET statement_timeout = 0;
+SET lock_timeout = '5s';
+SET work_mem = '512MB';
+SET maintenance_work_mem = '512MB';
+
 DROP MATERIALIZED VIEW IF EXISTS gb_land_mask;
 
--- Close tile seams: buffer OUT (eps), union, buffer IN (eps) back to coast.
--- If you still see seam artifacts later, raise eps to 12.0.
+WITH raw AS (
+  -- aggregate all os_land rows first (one big geometry)
+  SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
+  FROM os_land
+),
+closed AS (
+  -- "close" the seams: buffer OUT then IN (tune eps if needed)
+  SELECT ST_Buffer(ST_Buffer(geom, 12.0), -12.0) AS geom
+  FROM raw
+)
 CREATE MATERIALIZED VIEW gb_land_mask AS
-SELECT
-  ST_CollectionExtract(
-    ST_Buffer(
-      ST_UnaryUnion( ST_Collect(geom) ),  -- aggregate all os_land rows first
-      8.0
-    ),
-    -8.0
-  )::geometry(MultiPolygon,27700) AS geom
-FROM os_land;
+SELECT ST_Multi(ST_CollectionExtract(geom, 3))::geometry(MultiPolygon,27700) AS geom
+FROM closed;
 
 CREATE INDEX gb_land_mask_gix ON gb_land_mask USING GIST (geom);
 ANALYZE gb_land_mask;
-
--- Sanity checks (1 row expected)
--- SELECT COUNT(*) FROM gb_land_mask;
--- SELECT ST_NumGeometries(geom) FROM gb_land_mask;  -- can be many parts, but 1 row
