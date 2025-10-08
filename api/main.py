@@ -293,4 +293,4 @@ def nonland_stats():
     return {
         "total": total,
         "by_reason": [{"reason": r["reason"], "count": int(r["n"])} for r in rows],
-    }
+    }   
