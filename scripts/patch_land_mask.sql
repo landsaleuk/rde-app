@@ -7,18 +7,19 @@ SET maintenance_work_mem = '512MB';
 
 DROP MATERIALIZED VIEW IF EXISTS gb_land_mask;
 
+CREATE MATERIALIZED VIEW gb_land_mask AS
 WITH raw AS (
   -- aggregate all os_land rows first (one big geometry)
   SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
   FROM os_land
 ),
 closed AS (
-  -- "close" the seams: buffer OUT then IN (tune eps if needed)
+  -- "close" the tile seams: buffer OUT then IN (tune eps if needed)
   SELECT ST_Buffer(ST_Buffer(geom, 12.0), -12.0) AS geom
   FROM raw
 )
-CREATE MATERIALIZED VIEW gb_land_mask AS
-SELECT ST_Multi(ST_CollectionExtract(geom, 3))::geometry(MultiPolygon,27700) AS geom
+SELECT
+  ST_Multi(ST_CollectionExtract(geom, 3))::geometry(MultiPolygon,27700) AS geom
 FROM closed;
 
 CREATE INDEX gb_land_mask_gix ON gb_land_mask USING GIST (geom);
