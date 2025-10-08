@@ -6,10 +6,24 @@ from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/land")
 
 app = FastAPI(title="Rural Data Engine – Parcels Admin")
+
+# allow the static site (8080) to call the API (8000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://51.79.65.16:8080",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
 
 templates = Jinja2Templates(directory="templates")
 
@@ -221,3 +235,27 @@ def cohort_stats():
 def cohort_counts_alias():
     # backwards-compatible alias for the HTML page
     return cohort_stats()
+
+@app.get("/stats/nonland")
+def nonland_stats():
+    """
+    Return total excluded parcels and counts by reason,
+    reading from the small map MV we created: nonland_parcels_map.
+    """
+    sql = """
+        SELECT COALESCE(nonland_reason,'other') AS reason,
+               COUNT(*)::bigint AS n
+        FROM nonland_parcels_map
+        GROUP BY COALESCE(nonland_reason,'other')
+        ORDER BY reason;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()  # rows are dicts thanks to RealDictCursor
+
+    total = sum(int(r["n"]) for r in rows)
+    return {
+        "total": total,
+        "by_reason": [{"reason": r["reason"], "count": int(r["n"])} for r in rows],
+    }
