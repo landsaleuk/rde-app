@@ -1,9 +1,10 @@
--- Show all parcels excluded by non-land rules (water/foreshore, road/rail corridors, long-thin)
--- Uses nfl_gate (deduped) + parcel_1acre (geometry) + a primary reason from parcel_nonland_flags.
--- We pick one reason per parcel by priority so you can color/style in the UI.
+-- Show all parcels excluded by non-land rules (water/foreshore, road/rail corridors, long-thin).
+-- Uses nfl_gate (deduped) + parcel_1acre (geom) + a primary reason from parcel_nonland_flags.
+-- This definition is compatible with pg_tileserv (appears as public.nonland_parcels_map).
 
 DROP MATERIALIZED VIEW IF EXISTS nonland_parcels_map;
 
+CREATE MATERIALIZED VIEW nonland_parcels_map AS
 WITH reasons_ranked AS (
   SELECT
     parcel_id,
@@ -21,25 +22,23 @@ WITH reasons_ranked AS (
   WHERE is_nonland
 ),
 primary_reason AS (
-  -- one row per parcel_id, choosing the highest-priority reason
+  -- one row per parcel: pick the highest-priority reason
   SELECT DISTINCT ON (parcel_id)
          parcel_id, nonland_reason, water_ratio, road_ratio, rail_ratio, land_ratio
   FROM reasons_ranked
   ORDER BY parcel_id, pri
 )
-CREATE MATERIALIZED VIEW nonland_parcels_map AS
 SELECT
   p.parcel_id,
   (p.area_sqm/4046.8564224)::numeric(12,1) AS acres,
   pr.nonland_reason,
   pr.water_ratio, pr.road_ratio, pr.rail_ratio, pr.land_ratio,
-  -- prefer simplified geometry if present; fall back to full geom
   COALESCE(p.geom_gen, p.geom)::geometry(MultiPolygon,27700) AS geom
 FROM parcel_1acre p
-JOIN nfl_gate ng USING (parcel_id)             -- one row per parcel_id, deduped
+JOIN nfl_gate ng USING (parcel_id)            -- one row per parcel_id
 LEFT JOIN primary_reason pr USING (parcel_id)
 WHERE ng.is_nonland;
 
-CREATE INDEX nonland_parcels_map_gix        ON nonland_parcels_map USING GIST (geom);
-CREATE INDEX nonland_parcels_map_reason_ix  ON nonland_parcels_map (nonland_reason);
+CREATE INDEX nonland_parcels_map_gix       ON nonland_parcels_map USING GIST (geom);
+CREATE INDEX nonland_parcels_map_reason_ix ON nonland_parcels_map (nonland_reason);
 ANALYZE nonland_parcels_map;
