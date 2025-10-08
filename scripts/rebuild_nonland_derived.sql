@@ -7,9 +7,10 @@ DROP MATERIALIZED VIEW IF EXISTS cohort_parcels_map;
 DROP MATERIALIZED VIEW IF EXISTS target_cohorts;
 DROP MATERIALIZED VIEW IF EXISTS nfl_gate;
 DROP MATERIALIZED VIEW IF EXISTS parcel_nonland_flags;
-
--- Safety: ensure corridor buffers exist (cheap to rebuild; or comment these 2 blocks if you already have them)
 DROP MATERIALIZED VIEW IF EXISTS roads_buf;
+DROP MATERIALIZED VIEW IF EXISTS rail_buf;
+
+-- Corridor buffers (wider than before)
 CREATE MATERIALIZED VIEW roads_buf AS
 SELECT ST_Buffer(geom, 15.0) AS geom FROM os_roads_national
 UNION ALL
@@ -19,20 +20,23 @@ SELECT ST_Buffer(geom,  9.0) AS geom FROM os_roads_local;
 CREATE INDEX roads_buf_gix ON roads_buf USING GIST (geom);
 ANALYZE roads_buf;
 
-DROP MATERIALIZED VIEW IF EXISTS rail_buf;
 CREATE MATERIALIZED VIEW rail_buf AS
 SELECT ST_Buffer(geom, 10.0) AS geom FROM os_rail;
 CREATE INDEX rail_buf_gix ON rail_buf USING GIST (geom);
 ANALYZE rail_buf;
 
--- Flags (NO water; land mask + roads/rail + long-thin)
+-- Flags (NO water; use geom_gen to speed geometry ops)
 CREATE MATERIALIZED VIEW parcel_nonland_flags AS
 WITH base AS (
-  SELECT p.parcel_id, p.geom, p.area_sqm::double precision AS a_parcel
+  SELECT
+    p.parcel_id,
+    (p.geom_gen)::geometry(MultiPolygon,27700) AS geom,   -- << simplified
+    ST_Area(p.geom_gen)::double precision       AS a_parcel,
+    (p.area_sqm/4046.8564224)::numeric(12,2)    AS acres
   FROM parcel_1acre p
 ),
 land AS (
-  -- CROSS JOIN to the single-row mask -> exactly one row per parcel_id here
+  -- CROSS JOIN to single-row mask => exactly one row per parcel_id
   SELECT b.parcel_id,
          COALESCE(ST_Area(ST_Intersection(b.geom, m.geom)),0)::double precision AS a_land,
          NOT ST_Covers(m.geom, ST_PointOnSurface(b.geom)) AS offshore_centroid
@@ -55,26 +59,27 @@ rl AS (
 )
 SELECT
   b.parcel_id,
-  (b.a_parcel/4046.8564224)::numeric(12,2) AS acres,
+  b.acres,
   (land.a_land / NULLIF(b.a_parcel,0))::numeric(6,4) AS land_ratio,
-  (r.a_road  / NULLIF(b.a_parcel,0))::numeric(6,4) AS road_ratio,
-  (rl.a_rail / NULLIF(b.a_parcel,0))::numeric(6,4) AS rail_ratio,
+  (r.a_road  / NULLIF(b.a_parcel,0))::numeric(6,4)   AS road_ratio,
+  (rl.a_rail / NULLIF(b.a_parcel,0))::numeric(6,4)   AS rail_ratio,
+  -- compactness from simplified geom (fast, good enough)
   (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0))::numeric(6,4)
     AS compactness,
   CASE
-    WHEN offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.05 THEN TRUE
-    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.65 AND (b.a_parcel/4046.8564224) <= 40 THEN TRUE
-    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND (b.a_parcel/4046.8564224) <= 60 THEN TRUE
-    WHEN (b.a_parcel/4046.8564224) <= 30 AND
+    WHEN land.offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.05 THEN TRUE
+    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.65 AND b.acres <= 40 THEN TRUE
+    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND b.acres <= 60 THEN TRUE
+    WHEN b.acres <= 30 AND
          (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0)) < 0.030
       THEN TRUE
     ELSE FALSE
   END AS is_nonland,
   CASE
-    WHEN offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.05 THEN 'offshore/land<5%'
-    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.65 AND (b.a_parcel/4046.8564224) <= 40 THEN 'road corridor'
-    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND (b.a_parcel/4046.8564224) <= 60 THEN 'rail corridor'
-    WHEN (b.a_parcel/4046.8564224) <= 30 AND
+    WHEN land.offshore_centroid OR (land.a_land / NULLIF(b.a_parcel,0)) < 0.05 THEN 'offshore/land<5%'
+    WHEN (r.a_road  / NULLIF(b.a_parcel,0)) >= 0.65 AND b.acres <= 40 THEN 'road corridor'
+    WHEN (rl.a_rail / NULLIF(b.a_parcel,0)) >= 0.50 AND b.acres <= 60 THEN 'rail corridor'
+    WHEN b.acres <= 30 AND
          (4*PI()*b.a_parcel / NULLIF( ST_Perimeter(b.geom)::double precision * ST_Perimeter(b.geom)::double precision, 0)) < 0.030
       THEN 'long-thin'
     ELSE NULL
