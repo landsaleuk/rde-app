@@ -239,20 +239,55 @@ def cohort_counts_alias():
 @app.get("/stats/nonland")
 def nonland_stats():
     """
-    Return total excluded parcels and counts by reason,
-    reading from the small map MV we created: nonland_parcels_map.
+    Return total excluded parcels and counts by reason.
+    Prefer the light map MV (nonland_parcels_map); if missing, derive from flags.
     """
-    sql = """
+    fast_sql = """
         SELECT COALESCE(nonland_reason,'other') AS reason,
                COUNT(*)::bigint AS n
         FROM nonland_parcels_map
         GROUP BY COALESCE(nonland_reason,'other')
         ORDER BY reason;
     """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()  # rows are dicts thanks to RealDictCursor
+
+    fallback_sql = """
+        WITH reasons_ranked AS (
+          SELECT
+            parcel_id,
+            COALESCE(nonland_reason,'other') AS reason,
+            CASE
+              WHEN nonland_reason = 'offshore/land<10%' THEN 1
+              WHEN nonland_reason = 'water>=50%'        THEN 2
+              WHEN nonland_reason = 'road corridor'     THEN 3
+              WHEN nonland_reason = 'rail corridor'     THEN 4
+              WHEN nonland_reason = 'long-thin'         THEN 5
+              ELSE 99
+            END AS pri
+          FROM parcel_nonland_flags
+          WHERE is_nonland
+        ),
+        primary_reason AS (
+          SELECT DISTINCT ON (parcel_id) parcel_id, reason
+          FROM reasons_ranked
+          ORDER BY parcel_id, pri
+        )
+        SELECT reason, COUNT(*)::bigint AS n
+        FROM primary_reason
+        GROUP BY reason
+        ORDER BY reason;
+    """
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(fast_sql)
+                rows = cur.fetchall()
+    except Exception:
+        # Fallback: compute from flags (works even if the MV hasn’t been created yet)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(fallback_sql)
+                rows = cur.fetchall()
 
     total = sum(int(r["n"]) for r in rows)
     return {
