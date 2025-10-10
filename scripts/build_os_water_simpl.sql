@@ -8,7 +8,7 @@ SELECT
   -- simplify → heal → keep polygons only
   ST_CollectionExtract(
     ST_Buffer(
-      ST_SimplifyPreserveTopology(ST_MakeValid(geom), 10),  -- tolerance (m). Use 10.0 if you still see issues.
+      ST_SimplifyPreserveTopology(ST_MakeValid(geom), 20),  -- tolerance (m). Use 10.0 if you still see issues.
       0.0
     ),
     3
