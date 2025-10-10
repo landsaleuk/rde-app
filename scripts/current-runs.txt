@@ -1,0 +1,45 @@
+This worked
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/large_landmask_broken_up.sql
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/rebuild_corridor_buffers.sql
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/rebuild_nonland_from_tiles.sql
+
+
+Then
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 \
+  -f /scripts/build_nfl_gate.sql
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 \
+  -f /scripts/rebuild_cohorts_map.sql
+
+
+Next try
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_water_tiles.sql
+
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_parcel_metrics.sql
+
+docker compose exec -T db psql -U postgres -d land -c \
+"SELECT COUNT(*) AS rows,
+        round(AVG(water_pct),1) avg_water_pct,
+        round(AVG(land_pct),1)  avg_land_pct
+   FROM parcel_metrics;"
+
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/rebuild_parcel_catalog.sql
+
+docker compose exec -T db psql -U postgres -d land -c \
+"SELECT COUNT(*) n,
+        round(AVG(water_pct),1) avg_water,
+        round(AVG(land_pct),1)  avg_land
+   FROM parcel_catalog;"
+
+docker compose exec -T db psql -U postgres -d land -c \
+"SELECT cohort, COUNT(*) n, round(AVG(acres),1) avg_acres
+   FROM parcel_catalog GROUP BY cohort ORDER BY cohort;"
+
+
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/rebuild_map_from_catalog.sql
+
+
+
+
+docker compose exec -T db psql -U postgres -d land -c \
+"SELECT pid, state, wait_event_type, wait_event, now()-query_start AS age, left(query,120) AS q
+   FROM pg_stat_activity WHERE datname='land' ORDER BY query_start;"
