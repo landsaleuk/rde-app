@@ -12,7 +12,6 @@ docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 \
 
 
 Next try
-docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_os_water_simpl.sql
 docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_water_tiles.sql
 
 docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_parcel_metrics.sql
@@ -41,3 +40,7 @@ docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /script
 docker compose exec -T db psql -U postgres -d land -c \
 "SELECT pid, state, wait_event_type, wait_event, now()-query_start AS age, left(query,120) AS q
    FROM pg_stat_activity WHERE datname='land' ORDER BY query_start;"
+
+
+
+https://chatgpt.com/c/68e2105a-f650-8323-9ce3-9f3c9407a6f2
