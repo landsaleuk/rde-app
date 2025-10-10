@@ -12,4 +12,4 @@ DROP MATERIALIZED VIEW IF EXISTS rail_buf;
 CREATE MATERIALIZED VIEW rail_buf AS
 SELECT ST_MakeValid(ST_Buffer(geom, 10.0)) AS geom FROM os_rail;
 CREATE INDEX rail_buf_gix ON rail_buf USING GIST (geom);
-ANALYZE rail_buf;"
+ANALYZE rail_buf;
