@@ -1,0 +1,8 @@
+first do all logic:
+rebuild_nonland_and_cohorts_water_updatedland.sql
+
+then properly remove non-land:
+build_nfl_gate.sql
+
+then properly rebuiild cohorts:
+rebuild_cohorts.map.sql
