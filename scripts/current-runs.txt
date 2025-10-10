@@ -12,6 +12,7 @@ docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 \
 
 
 Next try
+docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_os_water_simpl.sql
 docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_water_tiles.sql
 
 docker compose exec -T db psql -U postgres -d land -v ON_ERROR_STOP=1 -f /scripts/build_parcel_metrics.sql
