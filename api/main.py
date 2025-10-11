@@ -2,8 +2,8 @@ import os
 import math
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, Query, Request, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,11 +35,16 @@ def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 def build_where(params, values):
+    # default: only A/B/C (you can expose X_exclude with a flag later)
     where = ["cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')"]
+
+    # acres
     if params.get("min_acres") is not None:
         where.append("acres >= %s"); values.append(params["min_acres"])
     if params.get("max_acres") is not None:
         where.append("acres <= %s"); values.append(params["max_acres"])
+
+    # uprns
     if params.get("min_uprn_interior") is not None:
         where.append("uprn_interior_count >= %s"); values.append(params["min_uprn_interior"])
     if params.get("max_uprn_interior") is not None:
@@ -48,45 +53,90 @@ def build_where(params, values):
         where.append("uprn_count >= %s"); values.append(params["min_uprn_total"])
     if params.get("max_uprn_total") is not None:
         where.append("uprn_count <= %s"); values.append(params["max_uprn_total"])
+
+    # new metrics
+    if params.get("min_water_pct") is not None:
+        where.append("water_pct >= %s"); values.append(params["min_water_pct"])
+    if params.get("max_water_pct") is not None:
+        where.append("water_pct <= %s"); values.append(params["max_water_pct"])
+    if params.get("min_land_pct") is not None:
+        where.append("land_pct >= %s"); values.append(params["min_land_pct"])
+    if params.get("max_land_pct") is not None:
+        where.append("land_pct <= %s"); values.append(params["max_land_pct"])
+
+    # boolean “excludes”
+    if params.get("exclude_offshore"):
+        where.append("NOT is_offshore")
+    if params.get("exclude_road_corridor"):
+        where.append("NOT is_road_corridor")
+    if params.get("exclude_rail_corridor"):
+        where.append("NOT is_rail_corridor")
+    if params.get("exclude_roadlike"):
+        where.append("NOT is_roadlike_longthin")
+
     return "WHERE " + " AND ".join(where)
 
 @app.get("/api/parcels")
 def list_parcels(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    # existing filters
     min_acres: float | None = None,
     max_acres: float | None = None,
     min_uprn_interior: int | None = None,
     max_uprn_interior: int | None = None,
     min_uprn_total: int | None = None,
     max_uprn_total: int | None = None,
+    # new filters
+    min_water_pct: float | None = None,
+    max_water_pct: float | None = None,
+    min_land_pct: float | None = None,
+    max_land_pct: float | None = None,
+    exclude_offshore: bool | None = None,
+    exclude_road_corridor: bool | None = None,
+    exclude_rail_corridor: bool | None = None,
+    exclude_roadlike: bool | None = None,
+    # sorting
     sort_by: str = Query("parcel_id"),
     sort_dir: str = Query("asc")
 ):
-    allowed_sorts = {"parcel_id","cohort","acres","uprn_count","uprn_interior_count"}
+    # columns allowed for order-by
+    allowed_sorts = {
+        "parcel_id","cohort","acres",
+        "uprn_count","uprn_interior_count","uprn_boundary_count",
+        "water_pct","land_pct"
+    }
     if sort_by not in allowed_sorts:
         sort_by = "parcel_id"
     sort_dir = "desc" if sort_dir.lower() == "desc" else "asc"
 
     params = {
-        "min_acres": min_acres,
-        "max_acres": max_acres,
-        "min_uprn_interior": min_uprn_interior,
-        "max_uprn_interior": max_uprn_interior,
-        "min_uprn_total": min_uprn_total,
-        "max_uprn_total": max_uprn_total,
+        "min_acres": min_acres, "max_acres": max_acres,
+        "min_uprn_interior": min_uprn_interior, "max_uprn_interior": max_uprn_interior,
+        "min_uprn_total": min_uprn_total, "max_uprn_total": max_uprn_total,
+        "min_water_pct": min_water_pct, "max_water_pct": max_water_pct,
+        "min_land_pct": min_land_pct, "max_land_pct": max_land_pct,
+        "exclude_offshore": exclude_offshore,
+        "exclude_road_corridor": exclude_road_corridor,
+        "exclude_rail_corridor": exclude_rail_corridor,
+        "exclude_roadlike": exclude_roadlike,
     }
     values = []
     where_sql = build_where(params, values)
 
     offset = (page - 1) * page_size
-    sql_count = f"SELECT COUNT(*) AS n FROM cohort_parcels_map {where_sql};"
+
+    # read from parcel_catalog (cohorts + metrics)
+    sql_count = f"SELECT COUNT(*) AS n FROM parcel_catalog {where_sql};"
     sql_page = f"""
-        SELECT parcel_id, cohort, acres,
-               uprn_count AS uprn_total,
-               uprn_interior_count AS uprn_interior,
-               (uprn_count - uprn_interior_count) AS uprn_boundary
-        FROM cohort_parcels_map
+        SELECT
+          parcel_id, cohort, acres,
+          uprn_count,
+          uprn_interior_count,
+          uprn_boundary_count,
+          water_pct, land_pct,
+          is_road_corridor, is_rail_corridor, is_offshore
+        FROM parcel_catalog
         {where_sql}
         ORDER BY {sort_by} {sort_dir}
         LIMIT %s OFFSET %s;
@@ -100,75 +150,98 @@ def list_parcels(
             cur.execute(sql_page, values + [page_size, offset])
             rows = cur.fetchall()
 
+    # map to client field names (backwards-compatible)
+    items = []
+    for r in rows:
+        items.append({
+            "parcel_id": r["parcel_id"],
+            "cohort": r["cohort"],
+            "acres": r["acres"],
+            "uprn_total": r["uprn_count"],
+            "uprn_interior": r["uprn_interior_count"],
+            "uprn_boundary": r["uprn_boundary_count"],
+            "water_pct": float(r["water_pct"]) if r["water_pct"] is not None else None,
+            "land_pct": float(r["land_pct"]) if r["land_pct"] is not None else None,
+            "is_road_corridor": r["is_road_corridor"],
+            "is_rail_corridor": r["is_rail_corridor"],
+            "is_offshore": r["is_offshore"],
+        })
+
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
         "pages": math.ceil(total / page_size) if page_size else 1,
-        "items": rows
+        "items": items
     }
 
 @app.get("/api/parcels.csv")
 def parcels_csv(
+    # same filters as list_parcels
     min_acres: float | None = None,
     max_acres: float | None = None,
     min_uprn_interior: int | None = None,
     max_uprn_interior: int | None = None,
     min_uprn_total: int | None = None,
-    max_uprn_total: int | None = None
+    max_uprn_total: int | None = None,
+    min_water_pct: float | None = None,
+    max_water_pct: float | None = None,
+    min_land_pct: float | None = None,
+    max_land_pct: float | None = None,
+    exclude_offshore: bool | None = None,
+    exclude_road_corridor: bool | None = None,
+    exclude_rail_corridor: bool | None = None,
+    exclude_roadlike: bool | None = None,
 ):
     params = {
-        "min_acres": min_acres,
-        "max_acres": max_acres,
-        "min_uprn_interior": min_uprn_interior,
-        "max_uprn_interior": max_uprn_interior,
-        "min_uprn_total": min_uprn_total,
-        "max_uprn_total": max_uprn_total,
+        "min_acres": min_acres, "max_acres": max_acres,
+        "min_uprn_interior": min_uprn_interior, "max_uprn_interior": max_uprn_interior,
+        "min_uprn_total": min_uprn_total, "max_uprn_total": max_uprn_total,
+        "min_water_pct": min_water_pct, "max_water_pct": max_water_pct,
+        "min_land_pct": min_land_pct, "max_land_pct": max_land_pct,
+        "exclude_offshore": exclude_offshore,
+        "exclude_road_corridor": exclude_road_corridor,
+        "exclude_rail_corridor": exclude_rail_corridor,
+        "exclude_roadlike": exclude_roadlike,
     }
     values = []
     where_sql = build_where(params, values)
 
-    sql = f"""
-        COPY (
-            SELECT parcel_id, cohort, acres,
-                   uprn_count AS uprn_total,
-                   uprn_interior_count AS uprn_interior,
-                   (uprn_count - uprn_interior_count) AS uprn_boundary
-            FROM cohort_parcels_map
-            {where_sql}
-            ORDER BY parcel_id
-        ) TO STDOUT WITH CSV HEADER
-    """
+    header = [
+        "parcel_id","cohort","acres",
+        "uprn_total","uprn_interior","uprn_boundary",
+        "water_pct","land_pct",
+        "is_road_corridor","is_rail_corridor","is_offshore"
+    ]
 
-    def stream():
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                # psycopg2 COPY requires mogrify for embedded params; build temp table is overkill.
-                # Here, we execute using server-side PREPARE via format — but since we already applied params
-                # in WHERE via bind values, we'll inject literals safely by relying on the cursor's mogrify where needed.
-                # Simpler approach: run a normal SELECT and yield CSV. Let's do that for compatibility:
-                pass
-
-    # Simpler streaming without COPY:
-    import csv, io
     def stream_select():
-        header = ["parcel_id","cohort","acres","uprn_total","uprn_interior","uprn_boundary"]
         yield ",".join(header) + "\n"
         chunk = 10000
         with get_conn() as conn:
             with conn.cursor(name="csv_cur") as cur:  # server-side cursor to stream rows
                 cur.itersize = chunk
                 cur.execute(f"""
-                    SELECT parcel_id, cohort, acres,
-                           uprn_count AS uprn_total,
-                           uprn_interior_count AS uprn_interior,
-                           (uprn_count - uprn_interior_count) AS uprn_boundary
-                    FROM cohort_parcels_map
+                    SELECT
+                      parcel_id, cohort, acres,
+                      uprn_count AS uprn_total,
+                      uprn_interior_count AS uprn_interior,
+                      uprn_boundary_count AS uprn_boundary,
+                      water_pct, land_pct,
+                      is_road_corridor, is_rail_corridor, is_offshore
+                    FROM parcel_catalog
                     {where_sql}
                     ORDER BY parcel_id
                 """, values)
                 for rec in cur:
-                    yield f'{rec["parcel_id"]},{rec["cohort"]},{rec["acres"]},{rec["uprn_total"]},{rec["uprn_interior"]},{rec["uprn_boundary"]}\n'
+                    row = [
+                        rec["parcel_id"], rec["cohort"], rec["acres"],
+                        rec["uprn_total"], rec["uprn_interior"], rec["uprn_boundary"],
+                        rec["water_pct"], rec["land_pct"],
+                        "true" if rec["is_road_corridor"] else "false",
+                        "true" if rec["is_rail_corridor"] else "false",
+                        "true" if rec["is_offshore"] else "false",
+                    ]
+                    yield ",".join(map(str,row)) + "\n"
 
     return StreamingResponse(stream_select(), media_type="text/csv",
                              headers={"Content-Disposition":"attachment; filename=parcels.csv"})
@@ -177,7 +250,6 @@ def parcels_csv(
 def parcel_uprns(parcel_id: int):
     """
     Return UPRNs inside a parcel with an 'interior' boolean and WGS84 coords.
-    Uses parcel_uprn_base + parcel_interior if available; falls back to buffer compute.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -218,7 +290,7 @@ def parcel_uprns(parcel_id: int):
 def cohort_stats():
     sql = """
       SELECT cohort, COUNT(*)::bigint AS n
-      FROM target_cohorts
+      FROM parcel_catalog
       WHERE cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')
       GROUP BY cohort
     """
@@ -233,64 +305,4 @@ def cohort_stats():
 
 @app.get("/api/cohort-counts")
 def cohort_counts_alias():
-    # backwards-compatible alias for the HTML page
     return cohort_stats()
-
-@app.get("/stats/nonland")
-def nonland_stats():
-    """
-    Return total excluded parcels and counts by reason.
-    Prefer the light map MV (nonland_parcels_map); if missing, derive from flags.
-    """
-    fast_sql = """
-        SELECT COALESCE(nonland_reason,'other') AS reason,
-               COUNT(*)::bigint AS n
-        FROM nonland_parcels_map
-        GROUP BY COALESCE(nonland_reason,'other')
-        ORDER BY reason;
-    """
-
-    fallback_sql = """
-        WITH reasons_ranked AS (
-          SELECT
-            parcel_id,
-            COALESCE(nonland_reason,'other') AS reason,
-            CASE
-              WHEN nonland_reason = 'offshore/land<10%' THEN 1
-              WHEN nonland_reason = 'water>=50%'        THEN 2
-              WHEN nonland_reason = 'road corridor'     THEN 3
-              WHEN nonland_reason = 'rail corridor'     THEN 4
-              WHEN nonland_reason = 'long-thin'         THEN 5
-              ELSE 99
-            END AS pri
-          FROM parcel_nonland_flags
-          WHERE is_nonland
-        ),
-        primary_reason AS (
-          SELECT DISTINCT ON (parcel_id) parcel_id, reason
-          FROM reasons_ranked
-          ORDER BY parcel_id, pri
-        )
-        SELECT reason, COUNT(*)::bigint AS n
-        FROM primary_reason
-        GROUP BY reason
-        ORDER BY reason;
-    """
-
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(fast_sql)
-                rows = cur.fetchall()
-    except Exception:
-        # Fallback: compute from flags (works even if the MV hasn’t been created yet)
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(fallback_sql)
-                rows = cur.fetchall()
-
-    total = sum(int(r["n"]) for r in rows)
-    return {
-        "total": total,
-        "by_reason": [{"reason": r["reason"], "count": int(r["n"])} for r in rows],
-    }   

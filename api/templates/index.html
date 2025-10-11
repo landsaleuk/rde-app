@@ -10,6 +10,7 @@
     .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
     .filters label{font-size:12px;color:#555;display:block}
     .filters input{width:110px;padding:6px;border:1px solid #ccc;border-radius:6px}
+    .filters .check{display:flex;align-items:center;gap:6px;margin-top:18px}
     .filters button{padding:8px 12px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer}
     .filters .secondary{background:#e6e6e6;color:#111}
     table{width:100%;border-collapse:collapse}
@@ -24,6 +25,7 @@
     .B_single_holding{background:#e5f0ff}
     .C_dispersed_estate{background:#fff5cc}
     .action{color:#0366d6;cursor:pointer}
+    .mono{font-variant-numeric: tabular-nums;}
   </style>
 </head>
 <body>
@@ -31,10 +33,24 @@
   <div class="filters">
     <div><label>Acreage min</label><input id="min_acres" type="number" step="0.1" placeholder="1"></div>
     <div><label>Acreage max</label><input id="max_acres" type="number" step="0.1" placeholder=""></div>
+
     <div><label>Interior UPRNs min</label><input id="min_uprn_interior" type="number" step="1" placeholder="0"></div>
     <div><label>Interior UPRNs max</label><input id="max_uprn_interior" type="number" step="1" placeholder=""></div>
+
     <div><label>Total UPRNs min</label><input id="min_uprn_total" type="number" step="1" placeholder="0"></div>
     <div><label>Total UPRNs max</label><input id="max_uprn_total" type="number" step="1" placeholder=""></div>
+
+    <div><label>Water % min</label><input id="min_water_pct" type="number" step="0.1" placeholder="0.0"></div>
+    <div><label>Water % max</label><input id="max_water_pct" type="number" step="0.1" placeholder=""></div>
+
+    <div><label>Land % min</label><input id="min_land_pct" type="number" step="0.1" placeholder=""></div>
+    <div><label>Land % max</label><input id="max_land_pct" type="number" step="0.1" placeholder=""></div>
+
+    <label class="check"><input id="exclude_offshore" type="checkbox"> Exclude offshore</label>
+    <label class="check"><input id="exclude_road_corridor" type="checkbox"> Exclude road corridors</label>
+    <label class="check"><input id="exclude_rail_corridor" type="checkbox"> Exclude rail corridors</label>
+    <label class="check"><input id="exclude_roadlike" type="checkbox"> Exclude road‑like (long‑thin)</label>
+
     <div>
       <button id="apply">Apply</button>
       <button id="reset" class="secondary">Reset</button>
@@ -72,6 +88,10 @@
         <th>UPRNs (total)</th>
         <th>UPRNs (interior)</th>
         <th>UPRNs (boundary)</th>
+        <th>Water %</th>
+        <th>Road?</th>
+        <th>Rail?</th>
+        <th>Offshore?</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -82,18 +102,29 @@
 <script>
 let page = 1;
 function qsel(id){ return document.getElementById(id); }
+
 function readFilters(){
   const f = {};
-  ["min_acres","max_acres","min_uprn_interior","max_uprn_interior","min_uprn_total","max_uprn_total"].forEach(k=>{
+  const ids = [
+    "min_acres","max_acres",
+    "min_uprn_interior","max_uprn_interior",
+    "min_uprn_total","max_uprn_total",
+    "min_water_pct","max_water_pct",
+    "min_land_pct","max_land_pct"
+  ];
+  ids.forEach(k=>{
     const v = qsel(k).value.trim();
     if(v!=="") f[k]=v;
   });
+  // checkboxes -> boolean flags (1/0)
+  if(qsel("exclude_offshore").checked)       f["exclude_offshore"]=1;
+  if(qsel("exclude_road_corridor").checked)  f["exclude_road_corridor"]=1;
+  if(qsel("exclude_rail_corridor").checked)  f["exclude_rail_corridor"]=1;
+  if(qsel("exclude_roadlike").checked)       f["exclude_roadlike"]=1;
   return f;
 }
-function buildQS(extra={}){
-  const params = new URLSearchParams({...readFilters(), ...extra});
-  return params.toString();
-}
+function buildQS(extra={}){ return new URLSearchParams({...readFilters(), ...extra}).toString(); }
+
 async function load(){
   const page_size = parseInt(qsel("pagesize").value,10);
   const res = await fetch(`/api/parcels?page=${page}&page_size=${page_size}&`+buildQS());
@@ -104,13 +135,18 @@ async function load(){
   data.items.forEach(r=>{
     const tr = document.createElement("tr");
     const cohortClass = r.cohort;
+    const yesno = v => v ? "Yes" : "No";
     tr.innerHTML = `
-      <td>${r.parcel_id}</td>
+      <td class="mono">${r.parcel_id}</td>
       <td><span class="badge ${cohortClass}">${r.cohort}</span></td>
-      <td>${Number(r.acres).toLocaleString()}</td>
-      <td>${r.uprn_total}</td>
-      <td>${r.uprn_interior}</td>
-      <td>${r.uprn_boundary}</td>
+      <td class="mono">${Number(r.acres).toLocaleString()}</td>
+      <td class="mono">${r.uprn_total}</td>
+      <td class="mono">${r.uprn_interior}</td>
+      <td class="mono">${r.uprn_boundary}</td>
+      <td class="mono">${r.water_pct != null ? r.water_pct.toFixed(1) : ''}</td>
+      <td>${yesno(r.is_road_corridor)}</td>
+      <td>${yesno(r.is_rail_corridor)}</td>
+      <td>${yesno(r.is_offshore)}</td>
       <td><span class="action" onclick="viewUprns(${r.parcel_id})">View UPRNs</span></td>
     `;
     tbody.appendChild(tr);
@@ -125,7 +161,15 @@ async function viewUprns(pid){
 
 qsel("apply").onclick = ()=>{ page=1; load(); };
 qsel("reset").onclick = ()=>{
-  ["min_acres","max_acres","min_uprn_interior","max_uprn_interior","min_uprn_total","max_uprn_total"].forEach(id=>qsel(id).value="");
+  [
+    "min_acres","max_acres",
+    "min_uprn_interior","max_uprn_interior",
+    "min_uprn_total","max_uprn_total",
+    "min_water_pct","max_water_pct",
+    "min_land_pct","max_land_pct"
+  ].forEach(id=>qsel(id).value="");
+  ["exclude_offshore","exclude_road_corridor","exclude_rail_corridor","exclude_roadlike"]
+    .forEach(id=>qsel(id).checked=false);
   page=1; load();
 };
 qsel("pagesize").onchange = ()=>{ page=1; load(); };
