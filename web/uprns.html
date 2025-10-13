@@ -75,12 +75,11 @@
         <th>All Parcels</th>
         <th>Cohort</th>
         <th>Acres</th>
-        <th>UPRNs (interior) in Parcel</th>
-        <th>Interior?</th>
+        <th>UPRNs in Parcel (total)</th>
         <th>Water %</th>
         <th>Actions</th>
       </tr>
-    </thead>
+    </thead>>
     <tbody id="rows"></tbody>
   </table>
 </div>
@@ -113,12 +112,11 @@ async function load(){
     tr.innerHTML = `
       <td class="mono">${r.uprn}</td>
       <td class="mono"><span class="action" onclick="viewParcel(${r.parcel_id})">${r.parcel_id}</span></td>
-      <td class="mono">${allParcels}</td>
-      <td><span class="badge ${cohortClass}">${r.cohort}</span></td>
+      <td class="mono">${Array.isArray(r.parcel_ids)? r.parcel_ids.join(", "): ""}</td>
+      <td><span class="badge ${r.cohort}">${r.cohort}</span></td>
       <td class="mono">${Number(r.acres).toLocaleString()}</td>
-      <td class="mono">${r.uprn_interior_count}</td>
-      <td>${yesno(r.is_interior)}</td>
-      <td class="mono">${r.water_pct != null ? r.water_pct.toFixed(1) : ''}</td>
+      <td class="mono">${r.uprn_count}</td>
+      <td class="mono">${r.water_pct != null ? Number(r.water_pct).toFixed(1) : ''}</td>
       <td><span class="action" onclick="viewParcel(${r.parcel_id})">Details</span></td>
     `;
     tbody.appendChild(tr);
