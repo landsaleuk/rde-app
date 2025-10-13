@@ -33,24 +33,16 @@
   <div class="filters">
     <div><label>Acreage min</label><input id="min_acres" type="number" step="0.1" placeholder="1"></div>
     <div><label>Acreage max</label><input id="max_acres" type="number" step="0.1" placeholder=""></div>
-
-    <div><label>Interior UPRNs min</label><input id="min_uprn_interior" type="number" step="1" placeholder="0"></div>
-    <div><label>Interior UPRNs max</label><input id="max_uprn_interior" type="number" step="1" placeholder=""></div>
-
     <div><label>Total UPRNs min</label><input id="min_uprn_total" type="number" step="1" placeholder="0"></div>
     <div><label>Total UPRNs max</label><input id="max_uprn_total" type="number" step="1" placeholder=""></div>
-
     <div><label>Water % min</label><input id="min_water_pct" type="number" step="0.1" placeholder="0.0"></div>
     <div><label>Water % max</label><input id="max_water_pct" type="number" step="0.1" placeholder=""></div>
-
     <div><label>Land % min</label><input id="min_land_pct" type="number" step="0.1" placeholder=""></div>
     <div><label>Land % max</label><input id="max_land_pct" type="number" step="0.1" placeholder=""></div>
-
     <label class="check"><input id="exclude_offshore" type="checkbox"> Exclude offshore</label>
     <label class="check"><input id="exclude_road_corridor" type="checkbox"> Exclude road corridors</label>
     <label class="check"><input id="exclude_rail_corridor" type="checkbox"> Exclude rail corridors</label>
-    <label class="check"><input id="exclude_roadlike" type="checkbox"> Exclude road‑like (long‑thin)</label>
-
+    <label class="check"><input id="exclude_roadlike" type="checkbox"> Exclude road‑like</label>
     <div>
       <button id="apply">Apply</button>
       <button id="reset" class="secondary">Reset</button>
@@ -88,8 +80,6 @@
         <th>Cohort</th>
         <th>Acres</th>
         <th>UPRNs (total)</th>
-        <th>UPRNs (interior)</th>
-        <th>UPRNs (boundary)</th>
         <th>Water %</th>
         <th>Road?</th>
         <th>Rail?</th>
@@ -104,25 +94,16 @@
 <script>
 let page = 1;
 function qsel(id){ return document.getElementById(id); }
-
 function readFilters(){
   const f = {};
-  const ids = [
-    "min_acres","max_acres",
-    "min_uprn_interior","max_uprn_interior",
-    "min_uprn_total","max_uprn_total",
-    "min_water_pct","max_water_pct",
-    "min_land_pct","max_land_pct"
-  ];
-  ids.forEach(k=>{
-    const v = qsel(k).value.trim();
-    if(v!=="") f[k]=v;
+  ["min_acres","max_acres","min_uprn_total","max_uprn_total",
+   "min_water_pct","max_water_pct","min_land_pct","max_land_pct"].forEach(k=>{
+    const v = qsel(k).value.trim(); if(v!=="") f[k]=v;
   });
-  // checkboxes -> boolean flags (1/0)
-  if(qsel("exclude_offshore").checked)       f["exclude_offshore"]=1;
-  if(qsel("exclude_road_corridor").checked)  f["exclude_road_corridor"]=1;
-  if(qsel("exclude_rail_corridor").checked)  f["exclude_rail_corridor"]=1;
-  if(qsel("exclude_roadlike").checked)       f["exclude_roadlike"]=1;
+  if(qsel("exclude_offshore").checked)      f["exclude_offshore"]=1;
+  if(qsel("exclude_road_corridor").checked) f["exclude_road_corridor"]=1;
+  if(qsel("exclude_rail_corridor").checked) f["exclude_rail_corridor"]=1;
+  if(qsel("exclude_roadlike").checked)      f["exclude_roadlike"]=1;
   return f;
 }
 function buildQS(extra={}){ return new URLSearchParams({...readFilters(), ...extra}).toString(); }
@@ -132,20 +113,16 @@ async function load(){
   const res = await fetch(`/api/parcels?page=${page}&page_size=${page_size}&`+buildQS());
   const data = await res.json();
   qsel("pageno").textContent = `Page ${data.page} of ${data.pages} (total ${data.total.toLocaleString()})`;
-  const tbody = qsel("rows");
-  tbody.innerHTML = "";
+  const tbody = qsel("rows"); tbody.innerHTML = "";
   data.items.forEach(r=>{
     const tr = document.createElement("tr");
-    const cohortClass = r.cohort;
     const yesno = v => v ? "Yes" : "No";
     tr.innerHTML = `
       <td class="mono">${r.parcel_id}</td>
-      <td><span class="badge ${cohortClass}">${r.cohort}</span></td>
+      <td><span class="badge ${r.cohort}">${r.cohort}</span></td>
       <td class="mono">${Number(r.acres).toLocaleString()}</td>
       <td class="mono">${r.uprn_total}</td>
-      <td class="mono">${r.uprn_interior}</td>
-      <td class="mono">${r.uprn_boundary}</td>
-      <td class="mono">${r.water_pct != null ? r.water_pct.toFixed(1) : ''}</td>
+      <td class="mono">${r.water_pct != null ? Number(r.water_pct).toFixed(1) : ''}</td>
       <td>${yesno(r.is_road_corridor)}</td>
       <td>${yesno(r.is_rail_corridor)}</td>
       <td>${yesno(r.is_offshore)}</td>
@@ -154,34 +131,22 @@ async function load(){
     tbody.appendChild(tr);
   });
 }
-
 async function viewUprns(pid){
   const res = await fetch(`/api/parcels/${pid}/uprns`);
   const data = await res.json();
   alert(`Parcel ${pid}\nUPRNs: ${data.uprns.length}\nExample: ${data.uprns.slice(0,5).map(u=>u.uprn).join(", ")}`);
 }
-
-qsel("apply").onclick = ()=>{ page=1; load(); };
-qsel("reset").onclick = ()=>{
-  [
-    "min_acres","max_acres",
-    "min_uprn_interior","max_uprn_interior",
-    "min_uprn_total","max_uprn_total",
-    "min_water_pct","max_water_pct",
-    "min_land_pct","max_land_pct"
-  ].forEach(id=>qsel(id).value="");
-  ["exclude_offshore","exclude_road_corridor","exclude_rail_corridor","exclude_roadlike"]
-    .forEach(id=>qsel(id).checked=false);
-  page=1; load();
+qsel("apply").onclick=()=>{page=1;load();};
+qsel("reset").onclick=()=>{
+  ["min_acres","max_acres","min_uprn_total","max_uprn_total",
+   "min_water_pct","max_water_pct","min_land_pct","max_land_pct"].forEach(id=>qsel(id).value="");
+  ["exclude_offshore","exclude_road_corridor","exclude_rail_corridor","exclude_roadlike"].forEach(id=>qsel(id).checked=false);
+  page=1;load();
 };
-qsel("pagesize").onchange = ()=>{ page=1; load(); };
-qsel("prev").onclick = ()=>{ if(page>1){ page--; load(); } };
-qsel("next").onclick = ()=>{ page++; load(); };
-
-qsel("download").onclick = ()=>{
-  window.open(`/api/parcels.csv?`+buildQS(), "_blank");
-};
-
+qsel("pagesize").onchange=()=>{page=1;load();};
+qsel("prev").onclick=()=>{if(page>1){page--;load();}};
+qsel("next").onclick=()=>{page++;load();};
+qsel("download").onclick=()=>{window.open(`/api/parcels.csv?`+buildQS(),"_blank");};
 load();
 </script>
 </body>
