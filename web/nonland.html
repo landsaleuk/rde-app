@@ -35,8 +35,7 @@
 <div class="panel" id="legend">
   <div class="title">Excluded parcels (QA)</div>
   <div id="counts">
-    <div class="row"><span><span class="swatch" style="background:#1f78b4"></span>offshore / land &lt; 10%</span><span class="badge" id="c-offshore">–</span></div>
-    <div class="row"><span><span class="swatch" style="background:#6baed6"></span>water ≥ 50%</span><span class="badge" id="c-water">–</span></div>
+    <div class="row"><span><span class="swatch" style="background:#1f78b4"></span>offshore / land &lt; 5%</span><span class="badge" id="c-offshore">–</span></div>
     <div class="row"><span><span class="swatch" style="background:#fdae6b"></span>road corridor</span><span class="badge" id="c-road">–</span></div>
     <div class="row"><span><span class="swatch" style="background:#fd8d3c"></span>rail corridor</span><span class="badge" id="c-rail">–</span></div>
     <div class="row"><span><span class="swatch" style="background:#bdbdbd"></span>long‑thin (likely highway title)</span><span class="badge" id="c-thin">–</span></div>
@@ -90,10 +89,11 @@
 
     // ---- non-land polygons ----
     const L = 'public.nonland_parcels_map';
+    // Backward-compatible color mapping (handles either <5% or <10% strings)
     const COLOR = [
       'match', ['get', 'nonland_reason'],
-      'offshore/land<10%', '#1f78b4',
-      'water>=50%',        '#6baed6',
+      'offshore/land<5%',  '#1f78b4',
+      'offshore/land<10%', '#1f78b4',   // legacy
       'road corridor',     '#fdae6b',
       'rail corridor',     '#fd8d3c',
       'long-thin',         '#bdbdbd',
@@ -128,9 +128,7 @@
                    paint: { 'line-color': '#aa9c7e', 'line-width': 1.1, 'line-opacity': 0.7 } });
 
     // ---- toggles ----
-    const toggle = (id, visible) => {
-      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
-    };
+    const toggle = (id, visible) => map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
     const bindToggle = (inputId, layerId) => {
       const el = document.getElementById(inputId);
       el.addEventListener('change', () => toggle(layerId, el.checked));
@@ -148,9 +146,10 @@
       const f = e.features && e.features[0];
       if (!f) return popup.remove();
       const p = f.properties;
+      const reason = p.nonland_reason || 'excluded';
       popup.setLngLat(e.lngLat).setHTML(
         `<div class="popup">
-           <div class="h">${p.nonland_reason || 'excluded'}</div>
+           <div class="h">${reason}</div>
            Parcel: ${p.parcel_id}<br>
            Acres: ${p.acres}
          </div>`).addTo(map);
@@ -164,8 +163,9 @@
     .then(d => {
       const by = Object.fromEntries(d.by_reason.map(x => [x.reason, x.count]));
       const get = k => by[k] || 0;
-      document.getElementById('c-offshore').textContent = get('offshore/land<10%').toLocaleString();
-      document.getElementById('c-water').textContent    = get('water>=50%').toLocaleString();
+      // combine legacy/offshore labels
+      const offshore = get('offshore/land<5%') + get('offshore/land<10%');
+      document.getElementById('c-offshore').textContent = offshore.toLocaleString();
       document.getElementById('c-road').textContent     = get('road corridor').toLocaleString();
       document.getElementById('c-rail').textContent     = get('rail corridor').toLocaleString();
       document.getElementById('c-thin').textContent     = get('long-thin').toLocaleString();
