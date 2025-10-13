@@ -3,25 +3,30 @@ SET lock_timeout = '5s';
 SET work_mem = '256MB';
 SET maintenance_work_mem = '512MB';
 
--- Pick the flags source that exists (MV or table)
+-- Create a view alias 'parcel_nonland_flags_v' that points to whichever source exists
 DO $$
 BEGIN
   IF to_regclass('public.parcel_nonland_flags') IS NOT NULL THEN
-    EXECUTE $$CREATE OR REPLACE VIEW parcel_nonland_flags_v AS
-             SELECT parcel_id, is_nonland, nonland_reason
-             FROM public.parcel_nonland_flags$$;
+    EXECUTE $v$
+      CREATE OR REPLACE VIEW parcel_nonland_flags_v AS
+      SELECT parcel_id, is_nonland, nonland_reason
+      FROM public.parcel_nonland_flags
+    $v$;
   ELSIF to_regclass('public.parcel_nonland_flags_tbl') IS NOT NULL THEN
-    EXECUTE $$CREATE OR REPLACE VIEW parcel_nonland_flags_v AS
-             SELECT parcel_id, is_nonland, nonland_reason
-             FROM public.parcel_nonland_flags_tbl$$;
+    EXECUTE $v$
+      CREATE OR REPLACE VIEW parcel_nonland_flags_v AS
+      SELECT parcel_id, is_nonland, nonland_reason
+      FROM public.parcel_nonland_flags_tbl
+    $v$;
   ELSE
-    RAISE EXCEPTION 'No parcel_nonland_flags* source found';
+    RAISE EXCEPTION 'No parcel_nonland_flags or parcel_nonland_flags_tbl found';
   END IF;
-END$$;
+END
+$$ LANGUAGE plpgsql;
 
 DROP MATERIALIZED VIEW IF EXISTS nonland_parcels_map;
 
--- Choose a single primary reason per parcel_id and build a light map MV
+-- Pick one primary reason per parcel (no 'water>=50%' in new logic)
 CREATE MATERIALIZED VIEW nonland_parcels_map AS
 WITH ranked AS (
   SELECT
@@ -38,8 +43,7 @@ WITH ranked AS (
   WHERE f.is_nonland
 ),
 primary_reason AS (
-  SELECT DISTINCT ON (parcel_id)
-         parcel_id, reason
+  SELECT DISTINCT ON (parcel_id) parcel_id, reason
   FROM ranked
   ORDER BY parcel_id, pri
 )
