@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import HTTPException
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/land")
 
@@ -306,3 +307,185 @@ def cohort_stats():
 @app.get("/api/cohort-counts")
 def cohort_counts_alias():
     return cohort_stats()
+
+def build_where_uprn(params, values):
+    # default cohorts A/B/C
+    where = ["cohort IN ('A_bare_land','B_single_holding','C_dispersed_estate')"]
+
+    # acres (from the primary parcel)
+    if params.get("min_acres") is not None:
+        where.append("acres >= %s"); values.append(params["min_acres"])
+    if params.get("max_acres") is not None:
+        where.append("acres <= %s"); values.append(params["max_acres"])
+
+    # metrics
+    if params.get("min_water_pct") is not None:
+        where.append("water_pct >= %s"); values.append(params["min_water_pct"])
+    if params.get("max_water_pct") is not None:
+        where.append("water_pct <= %s"); values.append(params["max_water_pct"])
+    if params.get("min_land_pct") is not None:
+        where.append("land_pct >= %s"); values.append(params["min_land_pct"])
+    if params.get("max_land_pct") is not None:
+        where.append("land_pct <= %s"); values.append(params["max_land_pct"])
+
+    return "WHERE " + " AND ".join(where)
+
+@app.get("/uprns")
+def uprns_page(request: Request):
+    return templates.TemplateResponse("uprns.html", {"request": request})
+
+@app.get("/api/uprns")
+def list_uprns(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    # filters
+    min_acres: float | None = None,
+    max_acres: float | None = None,
+    min_water_pct: float | None = None,
+    max_water_pct: float | None = None,
+    min_land_pct: float | None = None,
+    max_land_pct: float | None = None,
+    # sorting
+    sort_by: str = Query("uprn"),
+    sort_dir: str = Query("asc")
+):
+    allowed_sorts = {
+        "uprn","parcel_id","cohort","acres",
+        "uprn_interior_count","water_pct","land_pct"
+    }
+    if sort_by not in allowed_sorts:
+        sort_by = "uprn"
+    sort_dir = "desc" if sort_dir.lower() == "desc" else "asc"
+
+    params = {
+        "min_acres": min_acres, "max_acres": max_acres,
+        "min_water_pct": min_water_pct, "max_water_pct": max_water_pct,
+        "min_land_pct": min_land_pct, "max_land_pct": max_land_pct,
+    }
+    values = []
+    where_sql = build_where_uprn(params, values)
+
+    offset = (page - 1) * page_size
+
+    sql_count = f"SELECT COUNT(*) AS n FROM uprn_catalog {where_sql};"
+    sql_page = f"""
+        SELECT uprn, parcel_id, parcel_ids, cohort, acres,
+               uprn_interior_count, is_interior,
+               water_pct, land_pct, is_road_corridor, is_rail_corridor, is_offshore
+        FROM uprn_catalog
+        {where_sql}
+        ORDER BY {sort_by} {sort_dir}
+        LIMIT %s OFFSET %s;
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql_count, values)
+            total = cur.fetchone()["n"]
+
+            cur.execute(sql_page, values + [page_size, offset])
+            rows = cur.fetchall()
+
+    # small JSON massaging
+    items = []
+    for r in rows:
+        items.append({
+            "uprn": r["uprn"],
+            "parcel_id": r["parcel_id"],
+            "parcel_ids": r["parcel_ids"],  # array
+            "cohort": r["cohort"],
+            "acres": r["acres"],
+            "uprn_interior_count": r["uprn_interior_count"],
+            "is_interior": r["is_interior"],
+            "water_pct": float(r["water_pct"]) if r["water_pct"] is not None else None,
+            "land_pct": float(r["land_pct"]) if r["land_pct"] is not None else None,
+            "is_road_corridor": r["is_road_corridor"],
+            "is_rail_corridor": r["is_rail_corridor"],
+            "is_offshore": r["is_offshore"],
+        })
+
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": math.ceil(total / page_size) if page_size else 1,
+        "items": items
+    }
+
+@app.get("/api/uprns.csv")
+def uprns_csv(
+    min_acres: float | None = None,
+    max_acres: float | None = None,
+    min_water_pct: float | None = None,
+    max_water_pct: float | None = None,
+    min_land_pct: float | None = None,
+    max_land_pct: float | None = None,
+):
+    params = {
+        "min_acres": min_acres, "max_acres": max_acres,
+        "min_water_pct": min_water_pct, "max_water_pct": max_water_pct,
+        "min_land_pct": min_land_pct, "max_land_pct": max_land_pct,
+    }
+    values = []
+    where_sql = build_where_uprn(params, values)
+
+    header = [
+        "uprn","parcel_id","parcel_ids","cohort","acres",
+        "uprn_interior_count","is_interior","water_pct","land_pct",
+        "is_road_corridor","is_rail_corridor","is_offshore"
+    ]
+
+    def stream_select():
+        yield ",".join(header) + "\n"
+        chunk = 10000
+        with get_conn() as conn:
+            with conn.cursor(name="csv_cur") as cur:
+                cur.itersize = chunk
+                cur.execute(f"""
+                    SELECT uprn, parcel_id, parcel_ids, cohort, acres,
+                           uprn_interior_count, is_interior,
+                           water_pct, land_pct, is_road_corridor, is_rail_corridor, is_offshore
+                    FROM uprn_catalog
+                    {where_sql}
+                    ORDER BY uprn
+                """, values)
+                for rec in cur:
+                    row = [
+                        rec["uprn"], rec["parcel_id"],
+                        "{" + ",".join(map(str, rec["parcel_ids"])) + "}",
+                        rec["cohort"], rec["acres"],
+                        rec["uprn_interior_count"],
+                        "true" if rec["is_interior"] else "false",
+                        rec["water_pct"], rec["land_pct"],
+                        "true" if rec["is_road_corridor"] else "false",
+                        "true" if rec["is_rail_corridor"] else "false",
+                        "true" if rec["is_offshore"] else "false",
+                    ]
+                    yield ",".join(map(str,row)) + "\n"
+
+    return StreamingResponse(stream_select(), media_type="text/csv",
+                             headers={"Content-Disposition":"attachment; filename=uprns.csv"})
+
+@app.get("/api/parcels/{parcel_id}")
+def parcel_detail(parcel_id: int):
+    """
+    Return parcel-level metrics for click-through in UPRN view.
+    """
+    sql = """
+      SELECT parcel_id, cohort, acres,
+             uprn_count, uprn_interior_count, uprn_boundary_count,
+             water_pct, land_pct,
+             is_road_corridor, is_rail_corridor, is_offshore
+      FROM parcel_catalog
+      WHERE parcel_id = %s
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (parcel_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Parcel not found")
+            # normalize numerics
+            row["water_pct"] = float(row["water_pct"]) if row["water_pct"] is not None else None
+            row["land_pct"]  = float(row["land_pct"])  if row["land_pct"]  is not None else None
+            return row

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Parcels (A/B/C) – Rural Data Engine</title>
+  <title>UPRN View – Rural Data Engine</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#fafafa;color:#111}
@@ -10,7 +10,6 @@
     .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
     .filters label{font-size:12px;color:#555;display:block}
     .filters input{width:110px;padding:6px;border:1px solid #ccc;border-radius:6px}
-    .filters .check{display:flex;align-items:center;gap:6px;margin-top:18px}
     .filters button{padding:8px 12px;border:0;border-radius:6px;background:#111;color:#fff;cursor:pointer}
     .filters .secondary{background:#e6e6e6;color:#111}
     table{width:100%;border-collapse:collapse}
@@ -25,6 +24,7 @@
     .B_single_holding{background:#e5f0ff}
     .C_dispersed_estate{background:#fff5cc}
     .action{color:#0366d6;cursor:pointer}
+    .nav a{margin-left:12px;text-decoration:none;color:#0366d6}
     .mono{font-variant-numeric: tabular-nums;}
   </style>
 </head>
@@ -33,33 +33,19 @@
   <div class="filters">
     <div><label>Acreage min</label><input id="min_acres" type="number" step="0.1" placeholder="1"></div>
     <div><label>Acreage max</label><input id="max_acres" type="number" step="0.1" placeholder=""></div>
-
-    <div><label>Interior UPRNs min</label><input id="min_uprn_interior" type="number" step="1" placeholder="0"></div>
-    <div><label>Interior UPRNs max</label><input id="max_uprn_interior" type="number" step="1" placeholder=""></div>
-
-    <div><label>Total UPRNs min</label><input id="min_uprn_total" type="number" step="1" placeholder="0"></div>
-    <div><label>Total UPRNs max</label><input id="max_uprn_total" type="number" step="1" placeholder=""></div>
-
     <div><label>Water % min</label><input id="min_water_pct" type="number" step="0.1" placeholder="0.0"></div>
     <div><label>Water % max</label><input id="max_water_pct" type="number" step="0.1" placeholder=""></div>
-
     <div><label>Land % min</label><input id="min_land_pct" type="number" step="0.1" placeholder=""></div>
     <div><label>Land % max</label><input id="max_land_pct" type="number" step="0.1" placeholder=""></div>
-
-    <label class="check"><input id="exclude_offshore" type="checkbox"> Exclude offshore</label>
-    <label class="check"><input id="exclude_road_corridor" type="checkbox"> Exclude road corridors</label>
-    <label class="check"><input id="exclude_rail_corridor" type="checkbox"> Exclude rail corridors</label>
-    <label class="check"><input id="exclude_roadlike" type="checkbox"> Exclude road‑like (long‑thin)</label>
-
     <div>
       <button id="apply">Apply</button>
       <button id="reset" class="secondary">Reset</button>
     </div>
   </div>
-  <div>
-    <a href="/" style="margin-right:12px"><b>Parcel View</b></a>
-    <a href="/uprns" style="margin-right:12px">UPRN View</a>
-    <button id="download">Download CSV</button>
+  <div class="nav">
+    <a href="/">Parcel View</a>
+    <a href="/uprns"><b>UPRN View</b></a>
+    <button id="download" style="margin-left:12px">Download CSV</button>
   </div>
 </header>
 
@@ -84,16 +70,14 @@
   <table>
     <thead>
       <tr>
+        <th>UPRN</th>
         <th>Parcel ID</th>
+        <th>All Parcels</th>
         <th>Cohort</th>
         <th>Acres</th>
-        <th>UPRNs (total)</th>
-        <th>UPRNs (interior)</th>
-        <th>UPRNs (boundary)</th>
+        <th>UPRNs (interior) in Parcel</th>
+        <th>Interior?</th>
         <th>Water %</th>
-        <th>Road?</th>
-        <th>Rail?</th>
-        <th>Offshore?</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -104,32 +88,19 @@
 <script>
 let page = 1;
 function qsel(id){ return document.getElementById(id); }
-
 function readFilters(){
   const f = {};
-  const ids = [
-    "min_acres","max_acres",
-    "min_uprn_interior","max_uprn_interior",
-    "min_uprn_total","max_uprn_total",
-    "min_water_pct","max_water_pct",
-    "min_land_pct","max_land_pct"
-  ];
-  ids.forEach(k=>{
+  ["min_acres","max_acres","min_water_pct","max_water_pct","min_land_pct","max_land_pct"].forEach(k=>{
     const v = qsel(k).value.trim();
     if(v!=="") f[k]=v;
   });
-  // checkboxes -> boolean flags (1/0)
-  if(qsel("exclude_offshore").checked)       f["exclude_offshore"]=1;
-  if(qsel("exclude_road_corridor").checked)  f["exclude_road_corridor"]=1;
-  if(qsel("exclude_rail_corridor").checked)  f["exclude_rail_corridor"]=1;
-  if(qsel("exclude_roadlike").checked)       f["exclude_roadlike"]=1;
   return f;
 }
 function buildQS(extra={}){ return new URLSearchParams({...readFilters(), ...extra}).toString(); }
 
 async function load(){
   const page_size = parseInt(qsel("pagesize").value,10);
-  const res = await fetch(`/api/parcels?page=${page}&page_size=${page_size}&`+buildQS());
+  const res = await fetch(`/api/uprns?page=${page}&page_size=${page_size}&`+buildQS());
   const data = await res.json();
   qsel("pageno").textContent = `Page ${data.page} of ${data.pages} (total ${data.total.toLocaleString()})`;
   const tbody = qsel("rows");
@@ -138,49 +109,48 @@ async function load(){
     const tr = document.createElement("tr");
     const cohortClass = r.cohort;
     const yesno = v => v ? "Yes" : "No";
+    const allParcels = Array.isArray(r.parcel_ids) ? r.parcel_ids.join(", ") : "";
     tr.innerHTML = `
-      <td class="mono">${r.parcel_id}</td>
+      <td class="mono">${r.uprn}</td>
+      <td class="mono"><span class="action" onclick="viewParcel(${r.parcel_id})">${r.parcel_id}</span></td>
+      <td class="mono">${allParcels}</td>
       <td><span class="badge ${cohortClass}">${r.cohort}</span></td>
       <td class="mono">${Number(r.acres).toLocaleString()}</td>
-      <td class="mono">${r.uprn_total}</td>
-      <td class="mono">${r.uprn_interior}</td>
-      <td class="mono">${r.uprn_boundary}</td>
+      <td class="mono">${r.uprn_interior_count}</td>
+      <td>${yesno(r.is_interior)}</td>
       <td class="mono">${r.water_pct != null ? r.water_pct.toFixed(1) : ''}</td>
-      <td>${yesno(r.is_road_corridor)}</td>
-      <td>${yesno(r.is_rail_corridor)}</td>
-      <td>${yesno(r.is_offshore)}</td>
-      <td><span class="action" onclick="viewUprns(${r.parcel_id})">View UPRNs</span></td>
+      <td><span class="action" onclick="viewParcel(${r.parcel_id})">Details</span></td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-async function viewUprns(pid){
-  const res = await fetch(`/api/parcels/${pid}/uprns`);
-  const data = await res.json();
-  alert(`Parcel ${pid}\nUPRNs: ${data.uprns.length}\nExample: ${data.uprns.slice(0,5).map(u=>u.uprn).join(", ")}`);
+async function viewParcel(pid){
+  const res = await fetch(`/api/parcels/${pid}`);
+  if(!res.ok){ alert('Parcel not found'); return; }
+  const p = await res.json();
+  const yesno = v => v ? "Yes" : "No";
+  alert(
+    `Parcel ${p.parcel_id}\n` +
+    `Cohort: ${p.cohort}\n` +
+    `Acres: ${p.acres}\n` +
+    `UPRNs total: ${p.uprn_count} | interior: ${p.uprn_interior_count} | boundary: ${p.uprn_boundary_count}\n` +
+    `Water %: ${p.water_pct?.toFixed ? p.water_pct.toFixed(1) : p.water_pct}\n` +
+    `Road corridor: ${yesno(p.is_road_corridor)} | Rail corridor: ${yesno(p.is_rail_corridor)} | Offshore: ${yesno(p.is_offshore)}`
+  );
 }
 
 qsel("apply").onclick = ()=>{ page=1; load(); };
 qsel("reset").onclick = ()=>{
-  [
-    "min_acres","max_acres",
-    "min_uprn_interior","max_uprn_interior",
-    "min_uprn_total","max_uprn_total",
-    "min_water_pct","max_water_pct",
-    "min_land_pct","max_land_pct"
-  ].forEach(id=>qsel(id).value="");
-  ["exclude_offshore","exclude_road_corridor","exclude_rail_corridor","exclude_roadlike"]
-    .forEach(id=>qsel(id).checked=false);
+  ["min_acres","max_acres","min_water_pct","max_water_pct","min_land_pct","max_land_pct"]
+    .forEach(id=>qsel(id).value="");
   page=1; load();
 };
 qsel("pagesize").onchange = ()=>{ page=1; load(); };
 qsel("prev").onclick = ()=>{ if(page>1){ page--; load(); } };
 qsel("next").onclick = ()=>{ page++; load(); };
 
-qsel("download").onclick = ()=>{
-  window.open(`/api/parcels.csv?`+buildQS(), "_blank");
-};
+qsel("download").onclick = ()=>{ window.open(`/api/uprns.csv?`+buildQS(), "_blank"); };
 
 load();
 </script>
