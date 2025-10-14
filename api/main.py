@@ -386,3 +386,57 @@ def parcel_detail(parcel_id: int):
             row["water_pct"] = float(row["water_pct"]) if row["water_pct"] is not None else None
             row["land_pct"]  = float(row["land_pct"])  if row["land_pct"]  is not None else None
             return row
+
+@app.get("/api/uprn_ids.json")
+def uprn_ids_json(
+    # same filters as /api/uprns
+    min_acres: float | None = None,
+    max_acres: float | None = None,
+    min_water_pct: float | None = None,
+    max_water_pct: float | None = None,
+    min_land_pct: float | None = None,
+    max_land_pct: float | None = None,
+    # optional: sort; you can keep it fixed if you prefer
+    sort_by: str = Query("uprn"),
+    sort_dir: str = Query("asc")
+):
+    allowed_sorts = {"uprn","parcel_id","cohort","acres","uprn_count","water_pct","land_pct"}
+    if sort_by not in allowed_sorts:
+        sort_by = "uprn"
+    sort_dir = "desc" if sort_dir.lower() == "desc" else "asc"
+
+    params = {
+        "min_acres": min_acres, "max_acres": max_acres,
+        "min_water_pct": min_water_pct, "max_water_pct": max_water_pct,
+        "min_land_pct": min_land_pct, "max_land_pct": max_land_pct,
+    }
+    values = []
+    where_sql = build_where_uprn(params, values)
+
+    def stream_ids():
+        yield "["  # start JSON array
+        first = True
+        with get_conn() as conn:
+            # server-side cursor to avoid loading everything in memory
+            with conn.cursor(name="uprn_ids_cur") as cur:
+                cur.itersize = 50000
+                cur.execute(f"""
+                    SELECT uprn
+                    FROM uprn_catalog
+                    {where_sql}
+                    ORDER BY {sort_by} {sort_dir}
+                """, values)
+                for rec in cur:
+                    # UPRN is numeric (12-digit) so JSON number is safe for JS; emit as number
+                    if first:
+                        yield str(rec["uprn"])
+                        first = False
+                    else:
+                        yield "," + str(rec["uprn"])
+        yield "]"  # end JSON array
+
+    return StreamingResponse(
+        stream_ids(),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=uprn_ids.json"}
+    )

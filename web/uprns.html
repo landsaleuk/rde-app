@@ -46,6 +46,7 @@
     <a href="http://51.79.65.16:8000">Parcel View</a>
     <a href="http://51.79.65.16:8080/uprns.html"><b>UPRN View</b></a>
     <button id="download" style="margin-left:12px">Download CSV</button>
+    <button id="download_ids" style="margin-left:8px">Download UPRN IDs (JSON)</button>
   </div>
 </header>
 
@@ -96,6 +97,9 @@ function readFilters(){
   return f;
 }
 function buildQS(extra={}){ return new URLSearchParams({...readFilters(), ...extra}).toString(); }
+document.getElementById("download_ids").onclick = () => {
+  window.open(`/api/uprn_ids.json?` + buildQS(), "_blank");
+};
 
 async function load(){
   const page_size = parseInt(qsel("pagesize").value,10);
